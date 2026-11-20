@@ -556,6 +556,12 @@ def CondCode.interp (cc : CondCode) (s : StatusFlags) : Bool := match cc with
 @[kstep] def ShiftCountExpr.interpMasked [Labels] (c : ShiftCountExpr) (s : MachineData) (p : Std.Rco Int64) (w : Width) : Nat :=
   (c.interp s p).toNat &&& match w with | .W64 => 0x3f | _ => 0x1f -- "masked to 5 bits (or 6 bits with a 64-bit operand)"
 
+@[kstep] def BitOffset.interp [Labels] {w} (offset : BitOffset w) (s : MachineData) (p : Std.Rco Int64)
+    (ret : Nat → Effects) : Effects :=
+  match offset with
+  | .reg r => ret ((s.regs.get r).toNat % w.bits)
+  | .imm v => ret (((v.interp p).toBitVec.take 8).toNat % w.bits)
+
 def RelRegOrMem.interp [Labels] [AddressSize]
   (o : RelRegOrMem) (s : MachineData) (p : Std.Rco Int64)
   (ret : BitVec 64 → MachineData → Effects) :=
@@ -900,6 +906,20 @@ set_option maxHeartbeats 1000000
             ++ a.extractLsb' 32 8 ++ a.extractLsb' 40 8 ++ a.extractLsb' 48 8 ++ a.drop 56
       next (s.setReg dst (v.setWidth _))
     | _ => undefined (fun v => next (s.setReg dst v))
+  | .bt base offset =>
+    if w == .W8 then .unimplemented "8-bit bt" else
+    offset.interp s p (fun bit =>
+    let cf := (s.regs.get base).getLsbD bit
+    undefined (fun status : StatusFlags =>
+    next { s with status := { status with cf, zf := s.status.zf } }))
+  | .bts base offset =>
+    if w == .W8 then .unimplemented "8-bit bts" else
+    offset.interp s p (fun bit =>
+    let a := s.regs.get base
+    let cf := a.getLsbD bit
+    let v := a ||| ((1 : w.type) <<< bit)
+    undefined (fun status : StatusFlags =>
+    next ({ s with status := { status with cf, zf := s.status.zf } }.setReg base v)))
   | .jcc cc l =>
     if cc.interp s.status
     then jmp (label l) s

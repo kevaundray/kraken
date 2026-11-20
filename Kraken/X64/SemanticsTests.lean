@@ -71,3 +71,28 @@ private def busy : MachineData :=
 #guard runOp .cld busy == some busy
 #guard (runOp .std busy >>= runOp .std) == some { busy with df := true }
 #guard (runOp .std busy >>= runOp .cld) == some busy
+
+private def bitFlags : List StatusFlags :=
+  (List.range 64).map fun n => NondetSupportingType.from_hash (UInt64.ofNat n)
+
+#guard ([Operation.bt (.low .rax .W64) (.imm (.int64 0)),
+    .bts (.low .rax .W64) (.imm (.int64 0))].all fun op =>
+  let : Labels := ⟨fun _ => 0⟩
+  let : AddressSize := ⟨.W64⟩
+  match op.interp ⟨0, 1⟩ busy (fun st => .done ⟨st, 1⟩)
+      (fun _ _ => .unimplemented "jump") with
+  | @Effects.undefined _ .statusFlags k =>
+    bitFlags.all fun flags =>
+      match k flags with
+      | .done st => st.data.status == { flags with cf := true, zf := busy.status.zf }
+      | _ => false
+  | _ => false)
+
+#guard ([Operation.bt (.low .rax .W8) (.imm (.int64 0)),
+    .bts .ah (.reg .ah)].all fun op =>
+  let : Labels := ⟨fun _ => 0⟩
+  let : AddressSize := ⟨.W64⟩
+  match op.interp ⟨0, 1⟩ busy (fun st => .done ⟨st, 1⟩)
+      (fun _ _ => .unimplemented "jump") with
+  | .unimplemented _ => true
+  | _ => false)
