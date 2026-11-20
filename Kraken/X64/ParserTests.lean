@@ -1061,6 +1061,83 @@ run_meta do
 
 end bit_tests
 
+section got
+
+#guard (⸨mem| f@GOTPCREL(%rip) ⸩ : AddrExpr) ==
+  { base := some .rip, idx := none, disp := .sub (.gotSlot "f") .after_current_instruction }
+#guard (⸨mem| f(%rip) ⸩ : AddrExpr) ==
+  { base := some .rip, idx := none, disp := .sub (.label "f") .after_current_instruction }
+#guard (⸨instr| callq *f@GOTPCREL(%rip) ⸩ : Instr) ==
+  .regular .W64 .W64 (.call (.mem
+    { base := some .rip, idx := none, disp := .sub (.gotSlot "f") .after_current_instruction }))
+#guard (⸨instr| jmpq *f@GOTPCREL(%rip) ⸩ : Instr) ==
+  .regular .W64 .W64 (.jmp (.mem
+    { base := some .rip, idx := none, disp := .sub (.gotSlot "f") .after_current_instruction }))
+#guard (⸨instr| callq *%rsp ⸩ : Instr) ==
+  .regular .W64 .W64 (.call (.reg (.low .rsp .W64)))
+#guard (⸨instr| jmpq *%r11 ⸩ : Instr) ==
+  .regular .W64 .W64 (.jmp (.reg (.low .r11 .W64)))
+#guard (⸨instr| call *8(%rsp) ⸩ : Instr) ==
+  .regular .W64 .W64 (.call (.mem { base := some (.reg .rsp), idx := none, disp := .int64 8 }))
+
+/-- info: ⸨instr| call *f@GOTPCREL(%rip) ⸩ : Instr -/
+#guard_msgs (whitespace := lax) in
+#check ⸨instr| callq *f@GOTPCREL(%rip) ⸩
+
+/-- info: ⸨instr| jmp *%r11 ⸩ : Instr -/
+#guard_msgs (whitespace := lax) in
+#check ⸨instr| jmpq *%r11 ⸩
+
+/-- info: ⸨instr| jmp *sym(,%rax, 8) ⸩ : Instr -/
+#guard_msgs (whitespace := lax) in
+#check ⸨instr| jmpq *sym(,%rax,8) ⸩
+
+/-- info: ⸨instr| call *4096 ⸩ : Instr -/
+#guard_msgs (whitespace := lax) in
+#check ⸨instr| callq *4096 ⸩
+
+private def rejectsGOTContext (source : String) : MetaM Bool := do
+  try
+    let _ ← Kraken.X64.Parser.Meta.parse source
+    return false
+  catch _ =>
+    return true
+
+run_meta do
+  assert! ← [
+    "call $1", "jmp $f", "callq $f+8", "jmpq $f-g",
+    "call *$1", "jmpq *$f", "call %eax", "jmpq *%eax",
+    "movq *%rax, %rbx", "movq *f@GOTPCREL(%rip), %rax",
+    "movq $f@GOTPCREL, %rax",
+    "movq f@GOTPCREL, %rax",
+    "movq f@GOTPCREL(%rax), %rax",
+    "movq f@GOTPCREL(,%rax,8), %rax",
+    "movq f@GOTPCREL(%rip,%rax), %rax",
+    "movq f@GOTPCREL+8(%rip), %rax",
+    "movq f@GOTPCREL-8(%rip), %rax",
+    "movq f@GOTPCREL-g(%rip), %rax",
+    "movq $1, f@GOTPCREL(%rax)",
+    "leaq f@GOTPCREL(%rax), %rax",
+    "callq f@GOTPCREL", "jmpq f@GOTPCREL",
+    "callq *f@GOTPCREL", "jmpq *f@GOTPCREL(%rax)",
+    "btq $f@GOTPCREL, %rax", "btsq $f@GOTPCREL, %rax",
+    "shlq $f@GOTPCREL, %rax",
+    "pshufd $f@GOTPCREL, %xmm1, %xmm0",
+    ".byte f@GOTPCREL", ".word f@GOTPCREL",
+    ".long f@GOTPCREL", ".quad f@GOTPCREL",
+    ".quad f@GOTPCREL+8"
+  ].allM rejectsGOTContext
+  assert! ← [
+    ⸨prog| movq f@GOTPCREL(%rip), %rax ⸩,
+    ⸨prog| leaq f@GOTPCREL(%rip), %rax ⸩,
+    ⸨prog| callq *f@GOTPCREL(%rip) ⸩,
+    ⸨prog| jmpq *f@GOTPCREL(%rip) ⸩,
+    ⸨prog| jmpq *sym(,%rax,8) ⸩,
+    ⸨prog| callq *4096 ⸩
+  ].allM agreesWithCombinatorParser
+
+end got
+
 section preprocessing
 
 run_meta do

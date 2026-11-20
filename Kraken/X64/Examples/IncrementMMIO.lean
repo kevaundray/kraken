@@ -118,12 +118,12 @@ def handleEffects (ds : IncrementerState) (es : Effects)
       | _ => .error s!"nonmem_store of width other than 4 bytes"
   | @Effects.undefined _ t cont => handleEffects ds (cont (t.from_hash (hash ds))) ok
 
-def eval_schedule (schedule : List Bool) (e : Executable) (s : SystemState)
+def eval_schedule [Labels] (schedule : List Bool) (e : Executable) (s : SystemState)
     : Except String SystemState :=
   match schedule with
   | device's_turn :: rest =>
     if device's_turn then
       eval_schedule rest e { s with deviceState := s.deviceState.internal_step }
     else
-      handleEffects s.deviceState (Executable.step e s.machineState .done) (eval_schedule rest e)
+      handleEffects s.deviceState (Executable.step e s.machineState .done inferInstance) (eval_schedule rest e)
   | .nil => .ok s

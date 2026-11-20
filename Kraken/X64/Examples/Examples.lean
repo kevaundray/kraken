@@ -29,7 +29,9 @@ open Kraken.X64.Parser
 def p1 := ⸨prog| start: mov $1, %rax ⸩
 
 -- Super-simple example to debug tactics
-example [layout : Layout] s : straightlineStep (layout p1) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 1) := by
+example [layout : Layout] (slots : Label → Int64) s :
+    straightlineStep (labels := Executable.labels (layout p1) slots)
+    (layout p1) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 1) := by
   kprologue p1 with s
   sym => kstep; tactic =>
   decide
@@ -43,8 +45,8 @@ def swap : Program := ⸨prog|
   xor %rax, %rbx
   xor %rbx, %rax⸩
 
-theorem swap_correct [layout : Layout] (d : MachineData) :
-      Eventually (straightlineStep (layout swap))
+theorem swap_correct [layout : Layout] (slots : Label → Int64) (d : MachineData) :
+      Eventually (straightlineStep (labels := Executable.labels (layout swap) slots) (layout swap))
       (fun s' =>
           s'.1.regs.get Reg.rax = d.regs.get Reg.rbx ∧
           s'.1.regs.get Reg.rbx = d.regs.get Reg.rax)
@@ -64,7 +66,9 @@ start:
   mov $2, %rax⸩
 
 -- Example 2: stepping through both straightline and control instructions
-example [layout : Layout] (s : MachineData): Eventually (straightlineStep (layout p2)) (fun s => s.1.regs.rax = 2) ⟨s, layout.start⟩ := by
+example [layout : Layout] (slots : Label → Int64) (s : MachineData):
+    Eventually (straightlineStep (labels := Executable.labels (layout p2) slots) (layout p2))
+      (fun s => s.1.regs.rax = 2) ⟨s, layout.start⟩ := by
   apply step_cps
   kprologue p2 with s
   sym =>
@@ -100,9 +104,10 @@ _end:
 def p3_spec (s: MachineData): Nat := 2^(2^s.regs.rbx.toNat)
 
 set_option maxHeartbeats 4000000 in
-theorem p3_correct [layout: Layout] (s: MachineData):
+theorem p3_correct [layout: Layout] (slots : Label → Int64) (s: MachineData):
     p3_spec s < 2^64 →
-    Eventually (straightlineStep (layout p3)) (fun s => s.1.regs.rdx.toNat = p3_spec s.1 ∧ s.1.regs.rax = 0) ⟨s, layout.start⟩ :=
+    Eventually (straightlineStep (labels := Executable.labels (layout p3) slots) (layout p3))
+      (fun s => s.1.regs.rdx.toNat = p3_spec s.1 ∧ s.1.regs.rax = 0) ⟨s, layout.start⟩ :=
   by
     intros h_bounds
     apply step_cps
@@ -200,7 +205,9 @@ def p4 := eval% ⸨prog|start: mov $2, %rax
 dec %rax⸩
 
 -- Super-simple example to debug tactics
-example [layout : Layout] s : straightlineStep (layout p4) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 1) := by
+example [layout : Layout] (slots : Label → Int64) s :
+    straightlineStep (labels := Executable.labels (layout p4) slots)
+    (layout p4) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 1) := by
   kprologue p4 with s
   sym =>
   kstep
@@ -219,7 +226,9 @@ set_option maxHeartbeats 1000000
 set_option pp.rawOnError true
 /- set_option pp.all true -/
 
-example [layout : Layout] s : straightlineStep (layout p5) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 0) := by
+example [layout : Layout] (slots : Label → Int64) s :
+    straightlineStep (labels := Executable.labels (layout p5) slots)
+    (layout p5) ⟨s, layout.start⟩ (fun s => s.1.regs.rax = 0) := by
   kprologue p5 with s
   sym => kstep; tactic =>
   bv_decide
@@ -253,10 +262,10 @@ attribute [ksimp]
   UInt64.toBitVec_sub
   UInt64.toNat_toBitVec
 
-theorem p6_correct [layout : Layout] (s₀ : MachineData)
+theorem p6_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData)
     (stack : List UInt8) (h_len : stack.length = 8) (R : DataMem → Prop)
     (h_mem : s₀.dmem =⋆ Eq (stack.At (s₀.regs.rsp.toBitVec - 8#64)) ⋆ R) :
-    Eventually (straightlineStep (layout p6))
+    Eventually (straightlineStep (labels := Executable.labels (layout p6) slots) (layout p6))
       (fun s' => s'.1.regs.rax = s₀.regs.rax ∧ s'.1.regs.rsp = s₀.regs.rsp)
       ⟨s₀, layout.start⟩ := by
   apply step_cps
@@ -289,11 +298,11 @@ done:
 The hypothesis `h_mem` says the loader put that value in memory: nothing in this framework links
 the program text to memory yet, so it is assumed.
 -/
-theorem p7_correct [layout : Layout] (s₀ : MachineData) (R : DataMem → Prop)
-    (h_mem : letI := Executable.labels (layout p7)
+theorem p7_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData) (R : DataMem → Prop)
+    (h_mem : letI := Executable.labels (layout p7) slots
       s₀.dmem =⋆ Eq ((Int.toBytes 4 (label "end" - label "start").toInt).At (label "size").toBitVec) ⋆ R) :
-    Eventually (straightlineStep (layout p7))
-      (fun s' => letI := Executable.labels (layout p7)
+    Eventually (straightlineStep (labels := Executable.labels (layout p7) slots) (layout p7))
+      (fun s' => letI := Executable.labels (layout p7) slots
         s'.1.regs.rax = UInt64.ofBitVec (((label "end" - label "start").toBitVec.setWidth 32).setWidth 64))
       ⟨s₀, layout.start⟩ := by
   have h_addr (X Y : Int64) :
@@ -324,7 +333,10 @@ theorem p7_correct [layout : Layout] (s₀ : MachineData) (R : DataMem → Prop)
 #guard_msgs in
 #eval
   let exe := p7.fakeLayout
-  let := exe.labels
+  if exe.program.any (fun d => match d.directive with
+    | .instr i => i.hasSlot
+    | _ => false) then .error "No GOT slot address mapping supplied" else
+  let := exe.labels (fun name => panic! s!"unresolved GOT slot: {name}")
   let word : Int64 := label "end" - label "start"
   let data : MachineData := { dmem := Mem.storeInt {} (label "size").toBitVec 4 word.toInt }
   (Executable.eval exe {data, pc := label "start"} (fun st => st.pc = label "done")).bind
@@ -366,11 +378,11 @@ def move_2_regs_to_heap := ⸨prog|
     movq 8(%rdi), %r13
 ⸩
 
-theorem move_2_regs_to_heap_correct [layout : Layout] (s₀ : MachineData)
+theorem move_2_regs_to_heap_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData)
   (v1 v2 : UInt64)
   (R : DataMem → Prop)
   (h_mem : s₀.dmem =⋆ Eq (v1.At s₀.regs.rdi.toBitVec) ⋆ Eq (v2.At (s₀.regs.rdi.toBitVec + 8#64)) ⋆ R)
-  : Eventually (straightlineStep (layout move_2_regs_to_heap))
+  : Eventually (straightlineStep (labels := Executable.labels (layout move_2_regs_to_heap) slots) (layout move_2_regs_to_heap))
       (fun s' =>
         s'.1.regs.r12 = s₀.regs.rax ∧
         s'.1.regs.r13 = s₀.regs.rcx ∧
@@ -417,10 +429,10 @@ def sib_example := ⸨prog|
 
 -- FIXME: I had to replace `s₀.regs.r15.toBitVec * 8#64` with `BitVec.ofInt 64
 -- (s₀.regs.r15.toBitVec.toInt * 8)` to make the example go through. Why?
-theorem sib_example_correct [layout : Layout] (s₀ : MachineData)
+theorem sib_example_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData)
     (v : UInt64) (R : DataMem → Prop)
     (h_mem : s₀.dmem =⋆ Eq (v.At (s₀.regs.rdi.toBitVec + BitVec.ofInt 64 (s₀.regs.r15.toBitVec.toInt * 8))) ⋆ R) :
-    Eventually (straightlineStep (layout sib_example))
+    Eventually (straightlineStep (labels := Executable.labels (layout sib_example) slots) (layout sib_example))
       (fun s' => s'.1.regs.rax = 42)
       ⟨s₀, layout.start⟩ := by
   apply step_cps
@@ -446,10 +458,10 @@ def alu_mem_example := ⸨prog|
     movq $100, %rcx
     addq 136(%rdx), %rcx⸩
 
-theorem alu_mem_example_correct [layout : Layout] (s₀ : MachineData)
+theorem alu_mem_example_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData)
     (v : UInt64) (R : DataMem → Prop)
     (h_mem : s₀.dmem =⋆ Eq (v.At (s₀.regs.rdx.toBitVec + 136#64)) ⋆ R) :
-    Eventually (straightlineStep (layout alu_mem_example))
+    Eventually (straightlineStep (labels := Executable.labels (layout alu_mem_example) slots) (layout alu_mem_example))
       (fun s' => s'.1.regs.rcx = 142)
       ⟨s₀, layout.start⟩ := by
   apply step_cps
@@ -482,11 +494,11 @@ def dynamic_stack_example := ⸨prog|
     movq %rbp, %rsp
     movq -8(%rsp), %rbx⸩
 
-theorem dynamic_stack_example_correct [layout : Layout] (s₀ : MachineData)
+theorem dynamic_stack_example_correct [layout : Layout] (slots : Label → Int64) (s₀ : MachineData)
     (stack : List UInt8) (lstack : stack.length = 1024) R
     (h : s₀.regs.r9.toNat + s₀.regs.r15.toNat < 125)
     (h_mem : s₀.dmem =⋆ Eq (stack.At (s₀.regs.rsp.toBitVec - 1024)) ⋆ R) :
-    Eventually (straightlineStep (layout dynamic_stack_example))
+    Eventually (straightlineStep (labels := Executable.labels (layout dynamic_stack_example) slots) (layout dynamic_stack_example))
       (fun s' => s'.1.regs.rax = 42 ∧ s'.1.regs.rbx = 99 ∧ s'.1.regs.rsp = s₀.regs.rsp)
       ⟨s₀, layout.start⟩ := by
   apply step_cps

@@ -24,6 +24,7 @@ private theorem exists_least_le {P : Nat → Prop} {n : Nat} (h : P n) :
 public class Host where
   prog : Program
   layout : Layout
+  gotSlot : Label → Int64
   /-- Two directives at the same address have the same offset in the executable. -/
   addr_determines_offset : ∀ j k, (layout.apply prog).addrOf j = (layout.apply prog).addrOf k →
     (layout.apply prog).sizeBefore j = (layout.apply prog).sizeBefore k
@@ -34,7 +35,7 @@ public instance [Host] : Layout := Host.layout
 
 @[expose] public def Host.addrOf [Host] (k : Nat) : Int64 := Host.exe.addrOf k
 
-public instance [Host] : Labels := Executable.labels Host.exe
+public instance [Host] : Labels := Executable.labels Host.exe Host.gotSlot
 
 public theorem Host.sizeBefore_eq_of_addrOf_eq [Host] {j k : Nat} (h : Host.addrOf j = Host.addrOf k) :
     Host.exe.sizeBefore j = Host.exe.sizeBefore k :=

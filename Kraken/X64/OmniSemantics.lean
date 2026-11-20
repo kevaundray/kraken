@@ -33,8 +33,10 @@ public import Kraken.X64.Semantics
   dsimp only [require_access]
   split <;> rfl
 
-def step1 [Layout] (e: Executable) (s: MachineState) (post: @Post MachineState) : Prop :=
-  (Executable.step e s .done).All post
+def step1 [Layout] [labels : Labels] (e: Executable) (s: MachineState)
+    (post: @Post MachineState) : Prop :=
+  (Executable.step e s .done labels).All post
 
-def straightlineStep [Layout] (e: Executable) (s: MachineState) (post: @Post MachineState) : Prop :=
-  (Executable.straightline e s .done).All post
+def straightlineStep [Layout] [labels : Labels] (e: Executable) (s: MachineState)
+    (post: @Post MachineState) : Prop :=
+  (Executable.straightline e s .done labels).All post

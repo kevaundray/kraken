@@ -464,11 +464,14 @@ def MachineData.storeAvx (s : MachineData) (addr : BitVec 64) {w : AvxWidth} (v 
           ret { s with dmem := Mem.storeInt s.dmem addr w.bytes v.toInt }
       | .none => unimplemented "AVX nonmem store not supported")
 
-class Labels where label : Label → Int64
-export Labels (label)
+class Labels where
+  label : Label → Int64
+  gotSlot : Label → Int64
+export Labels (label gotSlot)
 
 @[kstep] def ConstExpr.interp [Labels] : ConstExpr → Std.Rco _root_.Int64 → _root_.Int64
   | .label l, _ => Labels.label l
+  | .gotSlot l, _ => Labels.gotSlot l
   | .int64 i, _ => i
   | .before_current_instruction, r => r.lower
   | .after_current_instruction, r => r.upper
@@ -564,7 +567,7 @@ def CondCode.interp (cc : CondCode) (s : StatusFlags) : Bool := match cc with
 
 def RelRegOrMem.interp [Labels] [AddressSize]
   (o : RelRegOrMem) (s : MachineData) (p : Std.Rco Int64)
-  (ret : BitVec 64 → MachineData → Effects) :=
+  (ret : BitVec 64 → MachineData → Effects) : Effects :=
   match o with
   | .rel c => ret (p.upper + c.interp p).toBitVec s
   | .reg r => ret (s.regs.get r) s
@@ -662,7 +665,8 @@ set_option maxHeartbeats 1000000
     let v := if cc.interp s.status then src else s.regs.get dst
     next (s.setReg dst v))
 -- Arithmetic
-  | .lea dst src => next (s.setReg dst ((src.interp s.regs p).zeroExtend _))
+  | .lea dst src =>
+    next (s.setReg dst ((src.interp s.regs p).zeroExtend _))
   | .add dst src =>
     src.interp s p (fun a s =>
     dst.interp s p (fun b s =>
@@ -1071,29 +1075,42 @@ theorem inert_of_size_zero [layout : Layout] [Labels] {i : Nat} {d : Directive}
   | word bytes _ => simp [Directive.interp, show bytes = 0 from hz]
 
 @[reducible]
-def Executable.labels (e : Executable) : Labels :=
+def Executable.labels (e : Executable) (slots : Label → Int64) : Labels :=
   { label l := (e.withAddresses.findSome?
-      (fun {directive, addr, ..} => if directive = .label l then .some addr else .none)).getD (-1) }
+      (fun {directive, addr, ..} => if directive = .label l then .some addr else .none)).getD (-1)
+    gotSlot := slots }
 
 def Executable.directivesFromLabel (e : Executable) (l : Label) : List (Kraken.Sized Directive) :=
   e.program.dropWhile (·.directive != .label l)
 
-def Executable.step (e : Executable) (s : MachineState) (ret : MachineState → Effects) : Effects :=
-  let := Executable.labels e
+def Executable.step (e : Executable) (s : MachineState) (ret : MachineState → Effects)
+    (labels : Labels) : Effects :=
+  let := labels
   Directives.interp (e.directivesAtAddress s.pc) s.data s.pc (fun pc s => ret ⟨s, pc⟩)
 
-def Executable.straightline (e : Executable) (s : MachineState) (ret : MachineState → Effects) : Effects :=
-  let := Executable.labels e
+def Executable.straightline (e : Executable) (s : MachineState) (ret : MachineState → Effects)
+    (labels : Labels) : Effects :=
+  let := labels
   Directives.interp (e.directivesFromAddress s.pc) s.data s.pc (fun pc s => ret ⟨s, pc⟩)
 
 -- -- Concrete evaluators for expedient testing
 
-partial def Executable.eval (e : Executable) (s : MachineState) (until_ : MachineState → Bool) : Except String (MachineState) :=
-  if until_ s then .ok s else handleEffects (Executable.straightline e s .done)
+partial def Executable.eval (e : Executable) (s : MachineState) (until_ : MachineState → Bool)
+    (labels : Option Labels := none) : Except String MachineState :=
+  match labels with
+  | some labels =>
+    if until_ s then .ok s else
+    handleEffects (Executable.straightline e s .done labels)
+  | none =>
+    if e.program.any (fun d => match d.directive with
+      | .instr i => i.hasSlot
+      | .word _ e => e.hasSlot
+      | _ => false) then .error "No GOT slot address mapping supplied" else
+    eval e s until_ (some (e.labels (fun name => panic! s!"unresolved GOT slot: {name}")))
 where
   handleEffects es :=
     match es with
-    | .done s => eval e s until_
+    | .done s => eval e s until_ labels
     | .unimplemented msg => .error msg
     | .gp_unaligned addr w => .error s!"#GP: Memory op at {repr addr} did not have mandatory alignment of {w}"
     | .require_read_access _ ok => handleEffects (ok ())
@@ -1140,6 +1157,10 @@ abbrev eval [layout : Layout] (prog : Program) := Executable.eval (layout prog)
     .instr (.regular .W64 .W64 (.lea (.low .rax .W64) (.mk .none .none (.int64 41)))),
     .instr (.regular .W64 .W64 (.inc (.reg (.low .rax .W64)))),
     .instr (.regular .W64 .W64 .ret) ]
-  let start := (Executable.labels exe).label "main"
+  if exe.program.any (fun d => match d.directive with
+    | .instr i => i.hasSlot
+    | .word _ e => e.hasSlot
+    | _ => false) then .error "No GOT slot address mapping supplied" else
+  let start := (Executable.labels exe (fun name => panic! s!"unresolved GOT slot: {name}")).label "main"
   let data : MachineData := { dmem := Mem.storeInt {} 0x100 8 0x1337, regs := {rsp := 0x100} }
   (Executable.eval exe {data, pc := start} (fun st => st.pc = 0x1337)).bind (fun s => .ok s.1.regs.rax)

@@ -87,6 +87,7 @@ abbrev Label := String
 
 inductive ConstExpr
   | label (_ : Label)
+  | gotSlot (_ : Label)
   | int64 (_ : Int64)
   | before_current_instruction | after_current_instruction
   | add (_ _ : ConstExpr) | sub (_ _ : ConstExpr)
@@ -291,6 +292,74 @@ inductive Instr
   | regular (address_size : Width) (operation_size : Width) (operation : Operation operation_size)
   | avx (address_size : Width) (operation_size : AvxWidth) (operation : AvxOperation operation_size)
   deriving Repr, DecidableEq, Hashable, Lean.ToExpr
+
+def ConstExpr.hasSlot : ConstExpr → Bool
+  | .gotSlot _ => true
+  | .add a b | .sub a b => a.hasSlot || b.hasSlot
+  | .label _ | .int64 _ | .before_current_instruction | .after_current_instruction => false
+
+def RegOrMem.hasSlot {w} : RegOrMem w → Bool
+  | .reg _ => false
+  | .mem a => a.disp.hasSlot
+
+def Operand.hasSlot {w} : Operand w → Bool
+  | .regOrMem rm => rm.hasSlot
+  | .imm c => c.hasSlot
+
+def ShiftCountExpr.hasSlot : ShiftCountExpr → Bool
+  | .cl => false
+  | .imm8 c => c.hasSlot
+
+def BitOffset.hasSlot {w} : BitOffset w → Bool
+  | .reg _ => false
+  | .imm c => c.hasSlot
+
+def RelRegOrMem.hasSlot : RelRegOrMem → Bool
+  | .rel c => c.hasSlot
+  | .reg _ => false
+  | .mem a => a.disp.hasSlot
+
+def Operation.hasSlot {w} : Operation w → Bool
+  | .mov dst src | .add dst src | .adc dst src | .sub dst src | .sbb dst src
+  | .cmp dst src | .test dst src | .and dst src | .or dst src | .xor dst src =>
+    dst.hasSlot || src.hasSlot
+  | .movsx dst src | .movzx dst src => dst.hasSlot || src.hasSlot
+  | .push src => src.hasSlot
+  | .pop dst | .inc dst | .dec dst | .neg dst | .not dst | .mul dst | .imul1 dst =>
+    dst.hasSlot
+  | .setcc _ dst => dst.hasSlot
+  | .cmovcc _ _ src | .adcx _ src | .adox _ src | .mulx _ _ src => src.hasSlot
+  | .lea _ src => src.disp.hasSlot
+  | .imul dst src1 src2 => dst.any RegOrMem.hasSlot || src1.hasSlot || src2.hasSlot
+  | .shl dst count | .shr dst count | .sar dst count | .rol dst count
+  | .ror dst count | .rcl dst count | .rcr dst count
+  | .shld dst _ count | .shrd dst _ count => dst.hasSlot || count.hasSlot
+  | .bt _ offset | .bts _ offset => offset.hasSlot
+  | .jmp target | .call target => target.hasSlot
+  | .movs _ | .stos _ | .bswap _ | .cld | .std | .jcc _ _ | .ret | .nop _ | .nopalign _ _ =>
+    false
+
+def AvxRegOrMem.hasSlot {w} : AvxRegOrMem w → Bool
+  | .avx _ => false
+  | .mem a => a.disp.hasSlot
+
+def AvxOperation.hasSlot {w} : AvxOperation w → Bool
+  | .movups dst src | .vmovups dst src | .movaps dst src | .subps dst src | .addps dst src
+  | .movdqu dst src | .movdqa dst src | .paddd dst src | .pshufb dst src | .vmovdqu dst src
+  | .sha256rnds2 dst src | .sha256msg1 dst src | .sha256msg2 dst src
+  | .vmovdqu32 dst src | .vmovdqa32 dst src => dst.hasSlot || src.hasSlot
+  | .pshufd dst src imm | .palignr dst src imm | .pblendw dst src imm
+  | .vprord dst src imm | .vpsrld dst src imm => dst.hasSlot || src.hasSlot || imm.hasSlot
+  | .vmovIn _ _ src => src.hasSlot
+  | .vmovOut _ dst _ => dst.hasSlot
+  | .vpaddd dst src1 src2 => dst.hasSlot || src1.hasSlot || src2.hasSlot
+  | .vpternlogd dst src2 src3 imm =>
+    dst.hasSlot || src2.hasSlot || src3.hasSlot || imm.hasSlot
+  | .vmovq _ _ | .vzeroupper => false
+
+def Instr.hasSlot : Instr → Bool
+  | .regular _ _ op => op.hasSlot
+  | .avx _ _ op => op.hasSlot
 
 instance [AddressSize] {w : Width} : CoeOut (Operation w) Instr where
   coe op := Instr.regular address_size w op

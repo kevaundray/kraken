@@ -344,6 +344,15 @@ def delabMem (aw : Width) : X64DelabM (TSyntax `x64_mem) := do
   | AddrExpr.mk baseOpt idxOpt dispExpr =>
     match_expr baseOpt with
     | Option.some _ baseExpr =>
+      if baseExpr.isConstOf ``RegOrRip.rip && idxOpt.isAppOfArity ``Option.none 1 then
+        match_expr dispExpr with
+        | ConstExpr.sub slotExpr afterExpr =>
+          if slotExpr.isAppOfArity ``ConstExpr.gotSlot 1 &&
+              afterExpr.isConstOf ``ConstExpr.after_current_instruction then
+            unless aw == .W64 do failure
+            let id ← withNaryArg 2 (withNaryArg 0 (withAppArg delabIdent))
+            return ← annotateStx (← `(x64_mem| $id:x64_ident @GOTPCREL(%rip)))
+        | _ => pure ()
       let baseStx ← withNaryArg 0 (withAppArg (delabRegOrRip aw))
       let disp? : Option (TSyntax `x64_const) ←
         if baseExpr.isConstOf ``RegOrRip.rip then
@@ -475,8 +484,8 @@ def delabShiftCount : DelabM (TSyntax `x64_shift_count) := do
     annotateStx (← `(x64_shift_count| $imm:x64_imm))
   | _ => failure
 
-/-- Delaborate a `RelRegOrMem` branch target into an `x64_operand`, falling back to `❰t❱` for open terms. -/
-def delabRelTarget (aw : Width) : X64DelabM (TSyntax `x64_operand) :=
+/-- Delaborate a `RelRegOrMem` branch target, falling back to `❰t❱` for open terms. -/
+def delabRelTarget (aw : Width) : X64DelabM (TSyntax `x64_target) :=
   tryX64Delab
     (do
       match_expr ← getExpr with
@@ -488,24 +497,20 @@ def delabRelTarget (aw : Width) : X64DelabM (TSyntax `x64_operand) :=
           unless lblExpr.isAppOfArity ``ConstExpr.label 1 do failure
           let id ← withAppArg (withNaryArg 0 (withAppArg delabIdent))
           if id matches `(x64_ident| ❰ $_ ❱) then failure
-          annotateStx (← `(x64_operand| $id:x64_ident))
+          annotateStx (← `(x64_target| $id:x64_ident))
         | _ => failure
       | RelRegOrMem.reg _ =>
         unless aw == .W64 do failure
         let r ← withAppArg delabReg
-        annotateStx (← `(x64_operand| $r:x64_reg))
-      | RelRegOrMem.mem mExpr =>
-        match_expr mExpr with
-        | AddrExpr.mk baseOpt _ _ =>
-          unless baseOpt.isAppOfArity ``Option.some 2 do failure
-          let m ← withAppArg (delabMem aw)
-          annotateStx (← `(x64_operand| $m:x64_mem))
-        | _ => failure
+        annotateStx (← `(x64_target| *$r:x64_reg))
+      | RelRegOrMem.mem _ =>
+        let m ← withAppArg (delabMem aw)
+        annotateStx (← `(x64_target| *$m:x64_mem))
       | _ => failure)
     (do
       unless aw == .W64 do failure
       let t ← delab
-      annotateStx (← `(x64_operand| ❰ $t ❱)))
+      annotateStx (← `(x64_target| ❰ $t ❱)))
 
 -- ============================================================================
 -- Mnemonic Suffixes & Width Inference Checks
@@ -772,11 +777,11 @@ private def delabOperation (aw : Width) (w? : Option Width) : X64DelabM (TSyntax
   | Operation.call _ _ =>
     unless w? == some .W64 do failure
     let target ← withNaryArg 1 (delabRelTarget aw)
-    `(x64_instr| call $target:x64_operand)
+    `(x64_instr| call $target:x64_target)
   | Operation.jmp _ _ =>
     unless w? == some .W64 do failure
     let target ← withNaryArg 1 (delabRelTarget aw)
-    `(x64_instr| jmp $target:x64_operand)
+    `(x64_instr| jmp $target:x64_target)
   | Operation.jcc _ ccExpr _ =>
     unless w? == some .W64 do failure
     let some cc := evalCondCode? ccExpr | failure

@@ -72,15 +72,21 @@ def summarize (s : MachineData) : StateSummary :=
 def stackLocation : UInt64 := 0x7ffecafee200
 def initData : MachineData := {regs := {rsp := stackLocation}, dmem := initStack stackLocation}
 
-def finishCriterion (p : Program) (s : MachineState) : Bool :=
-  s.pc = p.fakeLayout.labels.label _end
+def finishCriterion (labels : Labels) (s : MachineState) : Bool :=
+  s.pc = labels.label _end
 
 def runKraken (asmCode : String)
     : IO (Except String MachineState) := do
   try
     let prog ← Kraken.X64.Parser.parse (_start ++ ":" ++ asmCode ++ "\n" ++ _end ++ ":")
-    let initState : MachineState := ⟨initData, prog.fakeLayout.labels.label _start⟩
-    return prog.fakeLayout.eval initState (finishCriterion prog)
+    let exe := prog.fakeLayout
+    if exe.program.any (fun d => match d.directive with
+      | .instr i => i.hasSlot
+      | .word _ e => e.hasSlot
+      | _ => false) then return .error "No GOT slot address mapping supplied"
+    let labels := exe.labels (fun name => panic! s!"unresolved GOT slot: {name}")
+    let initState : MachineState := ⟨initData, labels.label _start⟩
+    return exe.eval initState (finishCriterion labels) (some labels)
   catch e =>
     return .error e.toString
 
@@ -161,7 +167,11 @@ def fuzzConfig : FuzzConfig MachineData StatusFlags StateSummary where
   parseSteps asmCode := do
     let .ok prog ← (Kraken.X64.Parser.parse asmCode).toBaseIO | failure
     let exe := prog.fakeLayout
-    let := exe.labels
+    if exe.program.any (fun d => match d.directive with
+      | .instr i => i.hasSlot
+      | .word _ e => e.hasSlot
+      | _ => false) then failure
+    let := exe.labels (fun name => panic! s!"unresolved GOT slot: {name}")
     return exe.withAddresses.map fun d : Kraken.Addressable Directive =>
       { d with directive := fun s p h => evalEffects h false (d.directive.interp s p (fun s => .done ⟨s, p.upper⟩) (fun _ _ => .unimplemented "jump")) }
   summarize := summarize
